@@ -1,0 +1,2 @@
+FLASK_APP=pinn_web.py
+FLASK_ENV=development
