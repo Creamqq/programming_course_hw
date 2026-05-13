@@ -509,9 +509,3 @@ api.close()
 - [vix_calculator.py](vix_calculator.py) - VIX计算核心模块
 - [tqsdk_option.py](tqsdk_option.py) - TqSdk数据获取模块
 - [api_server.py](api_server.py) - API服务接口
-
----
-
-## 更新日志
-
-- **2024-05-13**: 创建文档，详细说明VIX计算方法
