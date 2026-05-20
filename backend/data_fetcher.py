@@ -284,12 +284,13 @@ class TqsdkDataFetcher:
             print(f"获取实时期权链失败: {e}")
             return None
     
-    def get_option_chain_by_symbol(self, symbol):
+    def get_option_chain_by_symbol(self, symbol, max_options=100):
         """
         根据合约代码获取同系列期权链
         
         Args:
             symbol: 期权合约代码（如 SHFE.cu2610C126000）
+            max_options: 最大获取期权数量
         
         Returns:
             dict: 期权链数据
@@ -314,23 +315,47 @@ class TqsdkDataFetcher:
             
             self.api.wait_update()
             
+            if isinstance(option_symbols, list):
+                symbols_list = option_symbols[:max_options]
+            else:
+                symbols_list = list(option_symbols)[:max_options]
+            
+            quotes = {}
+            for opt_sym in symbols_list:
+                try:
+                    q = self.api.get_quote(opt_sym)
+                    quotes[opt_sym] = q
+                except:
+                    pass
+            
+            self.api.wait_update()
+            
             option_data = []
-            for opt_symbol in option_symbols:
-                opt_quote = self.get_option_quote(opt_symbol)
-                
-                if opt_quote and opt_quote['last_price'] > 0:
-                    option_data.append({
-                        'symbol': opt_symbol,
-                        'strike': opt_quote['strike'],
-                        'type': 'call' if 'C' in opt_symbol.upper() else 'put',
-                        'price': opt_quote['last_price'],
-                        'bid': opt_quote['bid_price'],
-                        'ask': opt_quote['ask_price'],
-                        'volume': opt_quote['volume'],
-                        'open_interest': opt_quote['open_interest'],
-                        'days_to_expiry': opt_quote.get('days_to_expiry'),
-                        'expire_datetime': opt_quote.get('expire_datetime')
-                    })
+            for opt_sym, q in quotes.items():
+                try:
+                    if q.last_price > 0 and q.strike_price > 0:
+                        days_to_expiry = None
+                        if hasattr(q, 'expire_datetime') and q.expire_datetime:
+                            expire_dt = datetime.fromtimestamp(q.expire_datetime / 1e9)
+                            days_to_expiry = max((expire_dt - datetime.now()).days, 0)
+                        
+                        option_data.append({
+                            'symbol': opt_sym,
+                            'strike': q.strike_price,
+                            'type': 'call' if 'C' in opt_sym.upper() else 'put',
+                            'price': q.last_price,
+                            'bid': q.bid_price1 if q.bid_price1 > 0 else q.last_price,
+                            'ask': q.ask_price1 if q.ask_price1 > 0 else q.last_price,
+                            'volume': q.volume,
+                            'open_interest': q.open_interest,
+                            'days_to_expiry': days_to_expiry,
+                            'expire_datetime': q.expire_datetime if hasattr(q, 'expire_datetime') else None
+                        })
+                except Exception as e:
+                    print(f"处理期权 {opt_sym} 失败: {e}")
+                    continue
+            
+            print(f"获取到期权数量: {len(option_data)}")
             
             return {
                 'underlying_price': underlying_price,

@@ -338,6 +338,14 @@ def calculate_volatility_surface_by_symbol():
         underlying_price = option_chain['underlying_price']
         options = option_chain['options']
         
+        print(f"标的价格: {underlying_price}, 期权数量: {len(options)}")
+        
+        if not underlying_price or underlying_price <= 0:
+            return jsonify({
+                'success': False,
+                'error': f'无法获取有效的标的价格: {underlying_price}'
+            }), 400
+        
         strikes = []
         maturities = []
         implied_vols = []
@@ -360,11 +368,16 @@ def calculate_volatility_surface_by_symbol():
                 strikes.append(K)
                 maturities.append(T)
                 implied_vols.append(float(iv))
+                print(f"期权 {opt['symbol']}: K={K}, T={T}, price={market_price}, IV={iv:.4f}")
+            else:
+                print(f"期权 {opt['symbol']}: 隐含波动率计算失败, K={K}, price={market_price}")
+        
+        print(f"成功计算隐含波动率的期权数量: {len(strikes)}")
         
         if len(strikes) < 4:
             return jsonify({
                 'success': False,
-                'error': '数据点不足，至少需要4个期权数据'
+                'error': f'数据点不足，成功计算隐含波动率的期权只有{len(strikes)}个，至少需要4个'
             }), 400
         
         vs = VolatilitySurface()
@@ -377,6 +390,7 @@ def calculate_volatility_surface_by_symbol():
             'data': surface_data
         })
     except Exception as e:
+        print(f"波动率曲面计算异常: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
