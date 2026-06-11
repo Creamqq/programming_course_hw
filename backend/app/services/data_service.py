@@ -1,5 +1,10 @@
-"""tqsdk 数据服务 - 获取期货行情数据"""
+"""tqsdk 数据服务 - 获取期货行情数据
+
+tqsdk 内部管理自己的 asyncio 事件循环，与 uvicorn 的事件循环冲突。
+解决方案：将所有 tqsdk 操作放在独立线程中运行，通过 run_in_executor 桥接。
+"""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
@@ -23,15 +28,17 @@ DOMINANT_CONTRACTS = {
 
 
 class DataService:
-    """tqsdk 数据服务"""
+    """tqsdk 数据服务（线程隔离）"""
 
     def __init__(self):
         self._api: Optional[TqApi] = None
         self._data_dir = Path(DATA_DIR)
         self._data_dir.mkdir(parents=True, exist_ok=True)
+        # 独立线程池，tqsdk 在此线程中运行，避免事件循环冲突
+        self._executor = ThreadPoolExecutor(max_workers=1)
 
     def _get_api(self) -> TqApi:
-        """获取或创建 TqApi 实例"""
+        """获取或创建 TqApi 实例（在线程池中调用）"""
         if self._api is None:
             auth = TqAuth(TQ_USER, TQ_PASSWORD) if TQ_USER else TqAuth()  # type: ignore[call-arg]
             sim = TqSim()
@@ -44,8 +51,15 @@ class DataService:
             self._api.close()
             self._api = None
 
-    async def get_dominant_contracts(self, exchange: Optional[str] = None) -> list[str]:
-        """获取主力合约列表"""
+    def _run_sync(self, func, *args, **kwargs):
+        """在线程池中运行同步函数"""
+        loop = asyncio.get_event_loop()
+        return loop.run_in_executor(self._executor, func, *args, **kwargs)
+
+    # ---- 同步实现（在线程池中执行） ----
+
+    def _sync_get_dominant_contracts(self, exchange: Optional[str] = None) -> list[str]:
+        """同步：获取主力合约列表"""
         api = self._get_api()
         contracts: list[str] = []
         exchanges = [exchange] if exchange else DOMINANT_CONTRACTS.keys()
@@ -53,7 +67,6 @@ class DataService:
         for ex in exchanges:
             if ex in DOMINANT_CONTRACTS:
                 for product in DOMINANT_CONTRACTS[ex]:
-                    # 获取主力合约: KQ.m@交易所.品种
                     symbol = f"KQ.m@{ex}.{product}"
                     try:
                         quote = api.get_quote(symbol)
@@ -65,21 +78,16 @@ class DataService:
                         continue
         return contracts
 
-    async def get_kline(
+    def _sync_get_kline(
         self,
         symbol: str,
         start_date: str,
         end_date: str,
         freq: str = "daily",
     ) -> pd.DataFrame:
-        """
-        获取K线数据
-        symbol: 合约代码 如 SHFE.cu2401
-        freq: daily / hourly / minute
-        """
+        """同步：获取K线数据"""
         api = self._get_api()
 
-        # 计算8小时对应的K线根数
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
         days = (end_dt - start_dt).days + 1
@@ -113,8 +121,8 @@ class DataService:
         })
         return df
 
-    async def get_quote(self, symbol: str) -> dict:
-        """获取实时行情"""
+    def _sync_get_quote(self, symbol: str) -> dict:
+        """同步：获取实时行情"""
         api = self._get_api()
         quote = api.get_quote(symbol)
         api.wait_update()
@@ -138,6 +146,44 @@ class DataService:
             "datetime": str(quote.datetime),  # type: ignore[union-attr]
         }
 
+    def _sync_get_multiple_klines(
+        self,
+        symbols: list[str],
+        start_date: str,
+        end_date: str,
+        freq: str = "daily",
+    ) -> dict[str, pd.DataFrame]:
+        """同步：批量获取多合约K线"""
+        result: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            try:
+                df = self._sync_get_kline(symbol, start_date, end_date, freq)
+                if not df.empty:
+                    result[symbol] = df
+            except Exception as e:
+                print(f"获取 {symbol} K线失败: {e}")
+        return result
+
+    # ---- 异步接口（供 FastAPI 调用，桥接到线程池） ----
+
+    async def get_dominant_contracts(self, exchange: Optional[str] = None) -> list[str]:
+        """获取主力合约列表"""
+        return await self._run_sync(self._sync_get_dominant_contracts, exchange)
+
+    async def get_kline(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        freq: str = "daily",
+    ) -> pd.DataFrame:
+        """获取K线数据"""
+        return await self._run_sync(self._sync_get_kline, symbol, start_date, end_date, freq)
+
+    async def get_quote(self, symbol: str) -> dict:
+        """获取实时行情"""
+        return await self._run_sync(self._sync_get_quote, symbol)
+
     async def get_multiple_klines(
         self,
         symbols: list[str],
@@ -146,15 +192,9 @@ class DataService:
         freq: str = "daily",
     ) -> dict[str, pd.DataFrame]:
         """批量获取多合约K线"""
-        result = {}
-        for symbol in symbols:
-            try:
-                df = await self.get_kline(symbol, start_date, end_date, freq)
-                if not df.empty:
-                    result[symbol] = df
-            except Exception as e:
-                print(f"获取 {symbol} K线失败: {e}")
-        return result
+        return await self._run_sync(self._sync_get_multiple_klines, symbols, start_date, end_date, freq)
+
+    # ---- 本地存储 ----
 
     def save_kline(self, df: pd.DataFrame, symbol: str):
         """保存K线到本地Parquet"""
