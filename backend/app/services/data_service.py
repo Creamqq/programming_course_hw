@@ -4,6 +4,8 @@ tqsdk 内部管理自己的 asyncio 事件循环，与 uvicorn 的事件循环�
 解决方案：将所有 tqsdk 操作放在独立线程中运行，通过 run_in_executor 桥接。
 """
 import asyncio
+import functools
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -13,6 +15,8 @@ import pandas as pd
 from tqsdk import TqApi, TqAuth, TqSim
 
 from app.config import TQ_USER, TQ_PASSWORD, DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 
 # 主力合约映射（常见品种）
@@ -39,42 +43,59 @@ class DataService:
     def _get_api(self) -> TqApi:
         """获取或创建 TqApi 实例（在线程池中调用）"""
         if self._api is None:
+            logger.info("正在初始化 TqApi, user=%s", TQ_USER or "(匿名)")
             auth = TqAuth(TQ_USER, TQ_PASSWORD) if TQ_USER else TqAuth()  # type: ignore[call-arg]
             sim = TqSim()
             self._api = TqApi(sim, auth=auth)
+            logger.info("TqApi 初始化完成")
         return self._api
 
     def close(self):
         """关闭连接"""
         if self._api is not None:
+            logger.info("关闭 TqApi 连接")
             self._api.close()
             self._api = None
 
-    def _run_sync(self, func, *args, **kwargs):
-        """在线程池中运行同步函数"""
+    async def _run_sync(self, func, *args, **kwargs):
+        """在线程池中运行同步函数，使用 functools.partial 传递参数"""
         loop = asyncio.get_event_loop()
-        return loop.run_in_executor(self._executor, func, *args, **kwargs)
+        partial_func = functools.partial(func, *args, **kwargs)
+        return await loop.run_in_executor(self._executor, partial_func)
 
     # ---- 同步实现（在线程池中执行） ----
 
     def _sync_get_dominant_contracts(self, exchange: Optional[str] = None) -> list[str]:
         """同步：获取主力合约列表"""
+        logger.info("开始获取主力合约列表, exchange=%s", exchange)
         api = self._get_api()
         contracts: list[str] = []
-        exchanges = [exchange] if exchange else DOMINANT_CONTRACTS.keys()
+        errors: list[str] = []
+        exchanges = [exchange] if exchange else list(DOMINANT_CONTRACTS.keys())
 
         for ex in exchanges:
-            if ex in DOMINANT_CONTRACTS:
-                for product in DOMINANT_CONTRACTS[ex]:
-                    symbol = f"KQ.m@{ex}.{product}"
-                    try:
-                        quote = api.get_quote(symbol)
-                        api.wait_update()
-                        underlying = quote.underlying_symbol  # type: ignore[union-attr]
-                        if underlying:
-                            contracts.append(str(underlying))
-                    except Exception:
-                        continue
+            if ex not in DOMINANT_CONTRACTS:
+                logger.warning("未知交易所: %s", ex)
+                continue
+            for product in DOMINANT_CONTRACTS[ex]:
+                symbol = f"KQ.m@{ex}.{product}"
+                try:
+                    quote = api.get_quote(symbol)
+                    api.wait_update()
+                    underlying = quote.underlying_symbol  # type: ignore[union-attr]
+                    if underlying:
+                        contracts.append(str(underlying))
+                        logger.debug("  %s -> %s", symbol, underlying)
+                    else:
+                        logger.debug("  %s -> 无主力合约", symbol)
+                except Exception as e:
+                    err_msg = f"{symbol}: {e}"
+                    errors.append(err_msg)
+                    logger.warning("  获取 %s 失败: %s", symbol, e)
+
+        logger.info("主力合约获取完成: 共 %d 个, 失败 %d 个", len(contracts), len(errors))
+        if errors:
+            logger.warning("失败详情: %s", "; ".join(errors[:5]))
         return contracts
 
     def _sync_get_kline(
@@ -85,6 +106,7 @@ class DataService:
         freq: str = "daily",
     ) -> pd.DataFrame:
         """同步：获取K线数据"""
+        logger.info("获取K线: symbol=%s, %s ~ %s, freq=%s", symbol, start_date, end_date, freq)
         api = self._get_api()
 
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -118,10 +140,12 @@ class DataService:
             "open_oi": "open_interest",
             "close_oi": "close_interest",
         })
+        logger.info("K线数据获取完成: %d 条", len(df))
         return df
 
     def _sync_get_quote(self, symbol: str) -> dict:
         """同步：获取实时行情"""
+        logger.info("获取实时行情: %s", symbol)
         api = self._get_api()
         quote = api.get_quote(symbol)
         api.wait_update()
@@ -153,6 +177,7 @@ class DataService:
         freq: str = "daily",
     ) -> dict[str, pd.DataFrame]:
         """同步：批量获取多合约K线"""
+        logger.info("批量获取K线: %d 个合约", len(symbols))
         result: dict[str, pd.DataFrame] = {}
         for symbol in symbols:
             try:
@@ -160,14 +185,15 @@ class DataService:
                 if not df.empty:
                     result[symbol] = df
             except Exception as e:
-                print(f"获取 {symbol} K线失败: {e}")
+                logger.warning("获取 %s K线失败: %s", symbol, e)
+        logger.info("批量K线获取完成: 成功 %d / %d", len(result), len(symbols))
         return result
 
     # ---- 异步接口（供 FastAPI 调用，桥接到线程池） ----
 
     async def get_dominant_contracts(self, exchange: Optional[str] = None) -> list[str]:
         """获取主力合约列表"""
-        return await self._run_sync(self._sync_get_dominant_contracts, exchange)
+        return await self._run_sync(self._sync_get_dominant_contracts, exchange=exchange)
 
     async def get_kline(
         self,
@@ -177,7 +203,7 @@ class DataService:
         freq: str = "daily",
     ) -> pd.DataFrame:
         """获取K线数据"""
-        return await self._run_sync(self._sync_get_kline, symbol, start_date, end_date, freq)
+        return await self._run_sync(self._sync_get_kline, symbol, start_date, end_date, freq=freq)
 
     async def get_quote(self, symbol: str) -> dict:
         """获取实时行情"""
@@ -191,7 +217,7 @@ class DataService:
         freq: str = "daily",
     ) -> dict[str, pd.DataFrame]:
         """批量获取多合约K线"""
-        return await self._run_sync(self._sync_get_multiple_klines, symbols, start_date, end_date, freq)
+        return await self._run_sync(self._sync_get_multiple_klines, symbols, start_date, end_date, freq=freq)
 
     # ---- 本地存储 ----
 

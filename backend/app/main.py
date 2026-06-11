@@ -1,6 +1,7 @@
 """FastAPI 主入口"""
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -10,13 +11,21 @@ from app.config import CORS_ORIGINS
 from app.api import market, factor, portfolio, backtest, trade
 from app.services.data_service import data_service
 
+# 配置日志
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    print("截面多空交易系统启动...")
+    logger.info("截面多空交易系统启动...")
     yield
-    print("关闭数据服务...")
+    logger.info("关闭数据服务...")
     data_service.close()
 
 

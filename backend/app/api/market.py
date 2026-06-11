@@ -1,8 +1,12 @@
 """市场数据 API"""
+import logging
+
 from fastapi import APIRouter, Query
 from typing import Optional
 
 from app.services.data_service import data_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/market", tags=["市场数据"])
 
@@ -10,8 +14,14 @@ router = APIRouter(prefix="/market", tags=["市场数据"])
 @router.get("/contracts")
 async def get_contracts(exchange: Optional[str] = None):
     """获取合约列表"""
-    contracts = await data_service.get_dominant_contracts(exchange)
-    return {"contracts": contracts, "count": len(contracts)}
+    logger.info("API: 获取合约列表, exchange=%s", exchange)
+    try:
+        contracts = await data_service.get_dominant_contracts(exchange)
+        logger.info("API: 返回 %d 个合约", len(contracts))
+        return {"contracts": contracts, "count": len(contracts)}
+    except Exception as e:
+        logger.error("API: 获取合约列表失败: %s", e, exc_info=True)
+        return {"contracts": [], "count": 0, "error": str(e)}
 
 
 @router.get("/kline/{symbol}")
