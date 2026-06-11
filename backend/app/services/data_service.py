@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-import numpy as np
 from tqsdk import TqApi, TqAuth, TqSim
 
 from app.config import TQ_USER, TQ_PASSWORD, DATA_DIR
@@ -104,7 +103,7 @@ class DataService:
 
         api.wait_update()
 
-        df = kline.to_dataframe()
+        df = kline.to_dataframe()  # type: ignore[union-attr]
         df = df[df["datetime"] > 0].copy()
         df["datetime"] = pd.to_datetime(df["datetime"], unit="ns")
         df = df[(df["datetime"] >= start_dt) & (df["datetime"] <= end_dt + timedelta(days=1))]

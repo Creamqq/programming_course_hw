@@ -1,4 +1,5 @@
 """因子分析 API"""
+import numpy as np
 from fastapi import APIRouter, Query
 from typing import Optional
 
@@ -99,20 +100,18 @@ async def compute_ic(
         if len(common) < 3:
             continue
 
-        factor_vals = common["factor_value"].values
-        ret_vals = [forward_returns[s] for s in common["symbol"]]
+        factor_vals = np.asarray(common["factor_value"].values, dtype=np.float64)
+        ret_vals = np.array([forward_returns[s] for s in common["symbol"]], dtype=np.float64)
 
-        import numpy as np
-        corr = np.corrcoef(factor_vals, ret_vals)[0, 1]
+        corr = float(np.corrcoef(factor_vals, ret_vals)[0, 1])
         if not np.isnan(corr):
             ic_series.append({"date": d, "ic": corr})
 
     # 统计
     if ic_series:
         ic_values = [x["ic"] for x in ic_series]
-        import numpy as np
-        ic_mean = np.mean(ic_values)
-        ic_std = np.std(ic_values)
+        ic_mean = float(np.mean(ic_values))
+        ic_std = float(np.std(ic_values))
         ir = ic_mean / max(ic_std, 1e-8)
         ic_positive_rate = sum(1 for x in ic_values if x > 0) / len(ic_values)
     else:

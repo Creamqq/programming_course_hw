@@ -1,8 +1,4 @@
 """交易服务 - tqsdk 下单与持仓管理"""
-import asyncio
-from typing import Optional
-from tqsdk import TqApi
-
 from app.services.data_service import data_service
 from app.models.schemas import TradeSignal
 
@@ -89,7 +85,7 @@ class TradeService:
                 "symbol": signal.symbol,
                 "direction": signal.direction,
                 "lots": signal.lots,
-                "traded_price": order.traded_price if hasattr(order, "traded_price") else None,
+                "traded_price": float(order.traded_price) if hasattr(order, "traded_price") and order.traded_price > 0 else None,  # type: ignore[union-attr]
             }
 
         except Exception as e:
