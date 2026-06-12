@@ -15,7 +15,7 @@ async def run_backtest(config: BacktestConfig):
     if config.universe:
         symbols = config.universe
     else:
-        symbols = await data_service.get_dominant_contracts()
+        symbols = await data_service.get_contracts()
 
     data_dict = await data_service.get_multiple_klines(
         symbols, config.start_date, config.end_date
