@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -11,11 +12,17 @@ from app.config import CORS_ORIGINS
 from app.api import market, factor, portfolio, backtest, trade
 from app.services.data_service import data_service
 
-# 配置日志
+# 配置日志 - 使用 stdout 并立即刷新，确保 uvicorn reload 模式下也能看到
+_log_handler = logging.StreamHandler(sys.stdout)
+_log_handler.setLevel(logging.DEBUG)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[_log_handler],
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -99,3 +106,9 @@ async def websocket_quote(websocket: WebSocket):
 @app.get("/")
 async def root():
     return {"message": "截面多空交易系统 API", "docs": "/docs"}
+
+
+@app.get("/api/health")
+async def health():
+    """健康检查"""
+    return {"status": "ok", "tq_connected": data_service._api is not None}

@@ -6,25 +6,34 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <span>主力合约列表</span>
-              <el-select v-model="selectedExchange" placeholder="选择交易所" clearable style="width: 160px" @change="loadContracts">
-                <el-option label="全部" value="" />
-                <el-option label="上期所" value="SHFE" />
-                <el-option label="大商所" value="DCE" />
-                <el-option label="郑商所" value="CZCE" />
-                <el-option label="中金所" value="CFFEX" />
-                <el-option label="能源中心" value="INE" />
-              </el-select>
+              <span>期货合约列表</span>
+              <div class="header-actions">
+                <el-input v-model="contractFilter" placeholder="搜索合约" clearable style="width: 160px; margin-right: 8px" />
+                <el-select v-model="selectedExchange" placeholder="选择交易所" clearable style="width: 140px" @change="loadContracts">
+                  <el-option label="全部" value="" />
+                  <el-option label="上期所" value="SHFE" />
+                  <el-option label="大商所" value="DCE" />
+                  <el-option label="郑商所" value="CZCE" />
+                  <el-option label="中金所" value="CFFEX" />
+                  <el-option label="能源中心" value="INE" />
+                  <el-option label="广期所" value="GFEX" />
+                </el-select>
+              </div>
             </div>
           </template>
-          <el-table :data="contractList" stripe v-loading="marketStore.loading" max-height="500">
-            <el-table-column prop="symbol" label="合约代码" width="180" />
+          <el-table :data="filteredContracts" stripe v-loading="marketStore.loading" max-height="500">
+            <el-table-column prop="symbol" label="合约代码" width="200" />
             <el-table-column prop="exchange" label="交易所" width="100" />
+            <el-table-column prop="product" label="品种" width="100" />
             <el-table-column label="操作" width="120">
               <template #default="{ row }">
                 <el-button size="small" type="primary" @click="viewKline(row.symbol)">K线</el-button>
               </template>
             </el-table-column>
+            <template #empty>
+              <div v-if="loadError" style="color: #f56c6c">{{ loadError }}</div>
+              <div v-else>暂无数据</div>
+            </template>
           </el-table>
         </el-card>
       </el-col>
@@ -106,7 +115,9 @@ use([CandlestickChart, LineChart, BarChart, GridComponent, TooltipComponent, Leg
 const marketStore = useMarketStore()
 
 const selectedExchange = ref('')
+const contractFilter = ref('')
 const quoteSymbol = ref('')
+const loadError = ref('')
 const quote = ref<QuoteData | null>(null)
 const klineVisible = ref(false)
 const klineSymbol = ref('')
@@ -114,8 +125,24 @@ const klineDateRange = ref<[Date, Date] | null>(null)
 const klineData = ref<KlineData[]>([])
 
 const contractList = computed(() =>
-  marketStore.contracts.map((c) => ({ symbol: c, exchange: c.split('.')[0] }))
+  marketStore.contracts.map((c) => {
+    const parts = c.split('.')
+    return {
+      symbol: c,
+      exchange: parts[0] || '',
+      product: parts[1] ? parts[1].replace(/\d+$/, '') : '',
+    }
+  })
 )
+
+const filteredContracts = computed(() => {
+  if (!contractFilter.value) return contractList.value
+  const keyword = contractFilter.value.toLowerCase()
+  return contractList.value.filter((c) =>
+    c.symbol.toLowerCase().includes(keyword) ||
+    c.product.toLowerCase().includes(keyword)
+  )
+})
 
 const priceClass = computed(() => {
   if (!quote.value) return ''
@@ -173,7 +200,15 @@ const klineOption = computed(() => {
 })
 
 async function loadContracts() {
-  await marketStore.fetchContracts(selectedExchange.value || undefined)
+  loadError.value = ''
+  try {
+    await marketStore.fetchContracts(selectedExchange.value || undefined)
+    if (marketStore.contracts.length === 0) {
+      loadError.value = '未获取到合约数据，请检查后端日志和 tqsdk 连接'
+    }
+  } catch (e: any) {
+    loadError.value = '加载失败: ' + (e.message || e)
+  }
 }
 
 async function fetchQuote() {
@@ -218,6 +253,10 @@ loadContracts()
 .card-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+}
+.header-actions {
+  display: flex;
   align-items: center;
 }
 .quote-info {

@@ -6,6 +6,7 @@ tqsdk 内部管理自己的 asyncio 事件循环，与 uvicorn 的事件循环�
 import asyncio
 import functools
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -18,16 +19,8 @@ from app.config import TQ_USER, TQ_PASSWORD, DATA_DIR
 
 logger = logging.getLogger(__name__)
 
-
-# 主力合约映射（常见品种）
-DOMINANT_CONTRACTS = {
-    "SHFE": ["cu", "al", "zn", "pb", "ni", "sn", "au", "ag", "rb", "wr", "hc", "ss", "bu", "ru", "nr", "sp", "fu", "lu", "bc"],
-    "DCE": ["c", "cs", "a", "b", "m", "y", "p", "fb", "bb", "jd", "rr", "l", "v", "pp", "j", "jm", "i", "eg", "eb", "pg"],
-    "CZCE": ["WH", "PM", "RI", "RS", "JR", "LR", "SR", "CF", "CY", "AP", "CJ", "TA", "OI", "MA", "FG", "SF", "SM", "SA", "UR", "PF"],
-    "CFFEX": ["IF", "IH", "IC", "IM", "TF", "T", "TS", "TL"],
-    "INE": ["sc", "lu", "nr", "bc"],
-    "GFEX": ["si", "lc"],
-}
+# 支持的交易所
+EXCHANGES = ["SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"]
 
 
 class DataService:
@@ -59,43 +52,46 @@ class DataService:
 
     async def _run_sync(self, func, *args, **kwargs):
         """在线程池中运行同步函数，使用 functools.partial 传递参数"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         partial_func = functools.partial(func, *args, **kwargs)
         return await loop.run_in_executor(self._executor, partial_func)
 
     # ---- 同步实现（在线程池中执行） ----
 
     def _sync_get_dominant_contracts(self, exchange: Optional[str] = None) -> list[str]:
-        """同步：获取主力合约列表"""
-        logger.info("开始获取主力合约列表, exchange=%s", exchange)
+        """同步：使用 query_quotes 获取所有未下市合约"""
+        logger.info("开始获取合约列表, exchange=%s", exchange)
         api = self._get_api()
-        contracts: list[str] = []
-        errors: list[str] = []
-        exchanges = [exchange] if exchange else list(DOMINANT_CONTRACTS.keys())
 
-        for ex in exchanges:
-            if ex not in DOMINANT_CONTRACTS:
-                logger.warning("未知交易所: %s", ex)
-                continue
-            for product in DOMINANT_CONTRACTS[ex]:
-                symbol = f"KQ.m@{ex}.{product}"
-                try:
-                    quote = api.get_quote(symbol)
-                    api.wait_update()
-                    underlying = quote.underlying_symbol  # type: ignore[union-attr]
-                    if underlying:
-                        contracts.append(str(underlying))
-                        logger.debug("  %s -> %s", symbol, underlying)
-                    else:
-                        logger.debug("  %s -> 无主力合约", symbol)
-                except Exception as e:
-                    err_msg = f"{symbol}: {e}"
-                    errors.append(err_msg)
-                    logger.warning("  获取 %s 失败: %s", symbol, e)
+        # 使用 query_quotes 动态查询所有未下市合约
+        try:
+            logger.info("调用 query_quotes...")
+            if exchange:
+                symbols = api.query_quotes(ins_class="FUTURE", exchange_id=exchange)
+            else:
+                symbols = api.query_quotes(ins_class="FUTURE")
+            # query_quotes 是同步查询，不需要 wait_update
+            # 在非交易时间 wait_update 会一直阻塞
+            logger.info("query_quotes 返回完成")
+        except Exception as e:
+            logger.error("query_quotes 调用失败: %s", e, exc_info=True)
+            return []
 
-        logger.info("主力合约获取完成: 共 %d 个, 失败 %d 个", len(contracts), len(errors))
-        if errors:
-            logger.warning("失败详情: %s", "; ".join(errors[:5]))
+        # symbols 是一个 list，包含所有未下市的期货合约代码
+        contracts = list(symbols) if symbols else []
+        logger.info("合约列表获取完成: 共 %d 个合约", len(contracts))
+
+        if len(contracts) == 0:
+            logger.warning("合约列表为空，可能是 tqsdk 连接未就绪或认证失败")
+
+        # 按交易所分组统计
+        exchange_stats: dict[str, int] = {}
+        for s in contracts:
+            ex = s.split(".")[0] if "." in s else "UNKNOWN"
+            exchange_stats[ex] = exchange_stats.get(ex, 0) + 1
+        for ex, count in sorted(exchange_stats.items()):
+            logger.info("  %s: %d 个合约", ex, count)
+
         return contracts
 
     def _sync_get_kline(
@@ -123,7 +119,9 @@ class DataService:
             data_length = days * 240
             kline = api.get_kline_serial(symbol, 60, data_length=data_length)
 
-        api.wait_update()
+        # wait_update 带10秒超时，避免非交易时间无限阻塞
+        deadline = time.time() + 10
+        api.wait_update(deadline=deadline)
 
         df = kline.to_dataframe()  # type: ignore[union-attr]
         df = df[df["datetime"] > 0].copy()
@@ -148,7 +146,9 @@ class DataService:
         logger.info("获取实时行情: %s", symbol)
         api = self._get_api()
         quote = api.get_quote(symbol)
-        api.wait_update()
+        # wait_update 带10秒超时，避免非交易时间无限阻塞
+        deadline = time.time() + 10
+        api.wait_update(deadline=deadline)
         return {
             "symbol": symbol,
             "last_price": float(quote.last_price),  # type: ignore[union-attr]
