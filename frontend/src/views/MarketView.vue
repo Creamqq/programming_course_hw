@@ -9,7 +9,7 @@
               <span>期货合约列表</span>
               <div class="header-actions">
                 <el-input v-model="contractFilter" placeholder="搜索合约" clearable style="width: 160px; margin-right: 8px" />
-                <el-select v-model="selectedExchange" placeholder="选择交易所" clearable style="width: 140px" @change="loadContracts">
+                <el-select v-model="selectedExchange" placeholder="选择交易所" clearable style="width: 140px; margin-right: 8px" @change="loadContracts">
                   <el-option label="全部" value="" />
                   <el-option label="上期所" value="SHFE" />
                   <el-option label="大商所" value="DCE" />
@@ -18,6 +18,7 @@
                   <el-option label="能源中心" value="INE" />
                   <el-option label="广期所" value="GFEX" />
                 </el-select>
+                <el-button type="warning" size="small" @click="refreshContracts" :loading="marketStore.loading">刷新数据</el-button>
               </div>
             </div>
           </template>
@@ -40,6 +41,48 @@
 
       <!-- 实时行情 -->
       <el-col :span="8">
+        <!-- 数据缓存 -->
+        <el-card style="margin-bottom: 20px">
+          <template #header>
+            <div class="card-header">
+              <span>数据缓存</span>
+              <el-button size="small" @click="loadCacheStats">刷新</el-button>
+            </div>
+          </template>
+          <div v-if="cacheStats" class="cache-info">
+            <div class="quote-row">
+              <span class="label">合约缓存</span>
+              <span class="value">{{ cacheStats.contracts?.count || 0 }} 个 ({{ cacheStats.contracts?.saved_at || '无' }})</span>
+            </div>
+            <div class="quote-row">
+              <span class="label">K线文件</span>
+              <span class="value">{{ cacheStats.kline_files || 0 }} 个</span>
+            </div>
+            <div class="quote-row">
+              <span class="label">K线总大小</span>
+              <span class="value">{{ cacheStats.kline_total_size_mb || 0 }} MB</span>
+            </div>
+          </div>
+          <el-divider />
+          <div>
+            <div style="margin-bottom: 8px; font-size: 13px; color: #666">预下载K线数据</div>
+            <el-form :inline="true" size="small" @submit.prevent="prefetchKline">
+              <el-date-picker v-model="prefetchDateRange" type="daterange" start-placeholder="开始" end-placeholder="结束" style="width: 240px; margin-right: 8px" />
+              <el-select v-model="prefetchExchange" placeholder="交易所" clearable style="width: 100px; margin-right: 8px">
+                <el-option label="全部" value="" />
+                <el-option label="上期所" value="SHFE" />
+                <el-option label="大商所" value="DCE" />
+                <el-option label="郑商所" value="CZCE" />
+              </el-select>
+              <el-input-number v-model="prefetchLimit" :min="1" :max="100" style="width: 100px; margin-right: 8px" />
+              <el-button type="primary" @click="prefetchKline" :loading="prefetching">下载</el-button>
+            </el-form>
+            <div v-if="prefetchResult" style="margin-top: 8px; font-size: 12px; color: #67c23a">
+              下载完成: 成功 {{ prefetchResult.success }} / 请求 {{ prefetchResult.requested }}
+            </div>
+          </div>
+        </el-card>
+
         <el-card>
           <template #header>
             <div class="card-header">
@@ -92,9 +135,15 @@
     <el-dialog v-model="klineVisible" :title="`${klineSymbol} K线图`" width="80%">
       <div class="kline-form">
         <el-date-picker v-model="klineDateRange" type="daterange" start-placeholder="开始日期" end-placeholder="结束日期" size="small" />
-        <el-button type="primary" size="small" @click="loadKline" style="margin-left: 8px">加载</el-button>
+        <el-button type="primary" size="small" @click="loadKline" :loading="klineLoading" style="margin-left: 8px">加载</el-button>
+        <span v-if="klineError" style="color: #f56c6c; margin-left: 12px; font-size: 12px">{{ klineError }}</span>
       </div>
-      <v-chart :option="klineOption" style="height: 500px" autoresize />
+      <div v-if="klineLoading" style="text-align: center; padding: 60px">
+        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+        <div style="margin-top: 12px; color: #999">加载K线数据中...</div>
+      </div>
+      <v-chart v-else-if="klineData.length" :option="klineOption" style="height: 500px" autoresize />
+      <div v-else style="text-align: center; padding: 60px; color: #999">选择日期范围后点击加载</div>
     </el-dialog>
   </div>
 </template>
@@ -104,6 +153,7 @@ import { ref, computed } from 'vue'
 import { useMarketStore } from '@/stores'
 import { marketApi } from '@/api'
 import type { QuoteData, KlineData } from '@/types'
+import { Loading } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { CandlestickChart, LineChart, BarChart } from 'echarts/charts'
@@ -123,7 +173,14 @@ const klineVisible = ref(false)
 const klineSymbol = ref('')
 const klineDateRange = ref<[Date, Date] | null>(null)
 const klineData = ref<KlineData[]>([])
-
+const klineLoading = ref(false)
+const klineError = ref('')
+const cacheStats = ref<any>(null)
+const prefetchDateRange = ref<[Date, Date] | null>(null)
+const prefetchExchange = ref('')
+const prefetchLimit = ref(20)
+const prefetching = ref(false)
+const prefetchResult = ref<any>(null)
 const contractList = computed(() =>
   marketStore.contracts.map((c) => {
     const parts = c.split('.')
@@ -211,6 +268,15 @@ async function loadContracts() {
   }
 }
 
+async function refreshContracts() {
+  loadError.value = ''
+  try {
+    await marketStore.fetchContracts(selectedExchange.value || undefined, true)
+  } catch (e: any) {
+    loadError.value = '刷新失败: ' + (e.message || e)
+  }
+}
+
 async function fetchQuote() {
   if (!quoteSymbol.value) return
   try {
@@ -224,26 +290,67 @@ async function fetchQuote() {
 function viewKline(symbol: string) {
   klineSymbol.value = symbol
   klineVisible.value = true
+  klineData.value = []
+  klineError.value = ''
   const end = new Date()
   const start = new Date()
   start.setMonth(start.getMonth() - 3)
   klineDateRange.value = [start, end]
+  // 自动加载
+  loadKline()
 }
 
 async function loadKline() {
   if (!klineDateRange.value) return
+  klineLoading.value = true
+  klineError.value = ''
   const [start, end] = klineDateRange.value
   const fmt = (d: Date) => d.toISOString().slice(0, 10)
   try {
     const res = await marketApi.getKline(klineSymbol.value, fmt(start), fmt(end))
     klineData.value = res.data.data
+    if (!klineData.value.length) {
+      klineError.value = '未获取到数据，可能该合约在此期间无交易'
+    }
+  } catch (e: any) {
+    klineError.value = '加载失败: ' + (e.response?.data?.detail || e.message || e)
+  } finally {
+    klineLoading.value = false
+  }
+}
+
+async function loadCacheStats() {
+  try {
+    const res = await marketApi.getCacheStats()
+    cacheStats.value = res.data
   } catch (e) {
     console.error(e)
   }
 }
 
+async function prefetchKline() {
+  if (!prefetchDateRange.value) return
+  prefetching.value = true
+  prefetchResult.value = null
+  const [start, end] = prefetchDateRange.value
+  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+  try {
+    const res = await marketApi.prefetchKline(
+      prefetchExchange.value || undefined,
+      fmt(start), fmt(end), 'daily', prefetchLimit.value
+    )
+    prefetchResult.value = res.data
+    loadCacheStats()
+  } catch (e: any) {
+    prefetchResult.value = { success: 0, requested: 0, error: e.message }
+  } finally {
+    prefetching.value = false
+  }
+}
+
 // 初始化加载
 loadContracts()
+loadCacheStats()
 </script>
 
 <style scoped>

@@ -7,10 +7,10 @@ export const useMarketStore = defineStore('market', () => {
   const contracts = ref<string[]>([])
   const loading = ref(false)
 
-  async function fetchContracts(exchange?: string) {
+  async function fetchContracts(exchange?: string, forceRefresh = false) {
     loading.value = true
     try {
-      const res = await marketApi.getContracts(exchange)
+      const res = await marketApi.getContracts(exchange, forceRefresh)
       contracts.value = res.data.contracts
     } finally {
       loading.value = false

@@ -141,7 +141,7 @@ class FactorEngine:
         if preprocess:
             result_df["factor_value"] = self.winsorize(result_df["factor_value"])
             result_df["factor_value"] = self.standardize(result_df["factor_value"])
-        result_df["rank"] = result_df["factor_value"].rank(ascending=False).astype(int)
+        result_df["rank"] = result_df["factor_value"].rank(ascending=False, na_option="bottom").astype(int)
         return result_df.sort_values("rank")
 
 

@@ -7,14 +7,18 @@ const api = axios.create({
 
 // 市场数据
 export const marketApi = {
-  getContracts: (exchange?: string) =>
-    api.get('/market/contracts', { params: { exchange } }),
-  getKline: (symbol: string, startDate: string, endDate: string, freq = 'daily') =>
-    api.get(`/market/kline/${symbol}`, { params: { start_date: startDate, end_date: endDate, freq } }),
+  getContracts: (exchange?: string, forceRefresh = false) =>
+    api.get('/market/contracts', { params: { exchange, force_refresh: forceRefresh } }),
+  getKline: (symbol: string, startDate: string, endDate: string, freq = 'daily', forceRefresh = false) =>
+    api.get(`/market/kline/${symbol}`, { params: { start_date: startDate, end_date: endDate, freq, force_refresh: forceRefresh } }),
   getQuote: (symbol: string) =>
     api.get(`/market/quote/${symbol}`),
   getBatchKline: (symbols: string, startDate: string, endDate: string, freq = 'daily') =>
     api.get('/market/batch-kline', { params: { symbols, start_date: startDate, end_date: endDate, freq } }),
+  getCacheStats: () =>
+    api.get('/market/cache/stats'),
+  prefetchKline: (exchange: string | undefined, startDate: string, endDate: string, freq = 'daily', limit = 20) =>
+    api.post('/market/cache/prefetch', null, { params: { exchange: exchange || undefined, start_date: startDate, end_date: endDate, freq, limit } }),
 }
 
 // 因子分析
