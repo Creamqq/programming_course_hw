@@ -272,7 +272,7 @@ class DataService:
         freq: str = "daily",
         force_refresh: bool = False,
     ) -> pd.DataFrame:
-        """同步：获取K线数据（优先本地缓存，增量更新）"""
+        """同步：获取K线数据（优先本地缓存，增量更新只获取新数据）"""
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
@@ -281,22 +281,59 @@ class DataService:
             cached = self._load_kline_from_file(symbol, freq)
             if cached is not None and not cached.empty:
                 cached["date"] = pd.to_datetime(cached["date"])
-                # 检查缓存是否覆盖了请求的时间范围
                 cache_start = cached["date"].min()
                 cache_end = cached["date"].max()
+
+                # 缓存完全覆盖请求范围，直接返回
                 if cache_start <= start_dt and cache_end >= end_dt:
-                    # 缓存完全覆盖请求范围，直接返回
                     result = cached[(cached["date"] >= start_dt) & (cached["date"] <= end_dt + timedelta(days=1))].copy()
                     logger.info("K线命中本地缓存: %s (%s), 返回 %d 条", symbol, freq, len(result))
                     return result
-                elif cache_end >= end_dt:
-                    # 缓存最新数据已够，只是历史数据不够早
+
+                # 缓存部分覆盖：只获取缓存之后的新数据，然后合并
+                if cache_end < end_dt:
+                    new_start = cache_end + timedelta(seconds=1)
+                    new_start_str = new_start.strftime("%Y-%m-%d")
+                    logger.info("K线增量更新: %s (%s), 缓存截止 %s, 只获取 %s ~ %s 的新数据",
+                                symbol, freq, str(cache_end)[:10], new_start_str, end_date)
+                    new_df = self._fetch_kline_from_tqsdk(symbol, new_start_str, end_date, freq)
+                    if not new_df.empty:
+                        self._save_kline_to_file(new_df, symbol, freq)
+                        # 重新加载合并后的数据
+                        merged = self._load_kline_from_file(symbol, freq)
+                        if merged is not None and not merged.empty:
+                            merged["date"] = pd.to_datetime(merged["date"])
+                            result = merged[(merged["date"] >= start_dt) & (merged["date"] <= end_dt + timedelta(days=1))].copy()
+                            logger.info("K线增量合并完成: %s (%s), 返回 %d 条", symbol, freq, len(result))
+                            return result
+                    # 新数据获取失败，返回缓存中已有的部分
                     result = cached[(cached["date"] >= start_dt) & (cached["date"] <= end_dt + timedelta(days=1))].copy()
                     if not result.empty:
-                        logger.info("K线部分命中缓存: %s (%s), 返回 %d 条", symbol, freq, len(result))
+                        logger.info("K线增量获取失败，返回缓存: %s (%s), %d 条", symbol, freq, len(result))
                         return result
 
-        # 2. 从 tqsdk 获取
+                # 缓存最新数据已够，只是历史数据不够早
+                result = cached[(cached["date"] >= start_dt) & (cached["date"] <= end_dt + timedelta(days=1))].copy()
+                if not result.empty:
+                    logger.info("K线部分命中缓存: %s (%s), 返回 %d 条", symbol, freq, len(result))
+                    return result
+
+        # 2. 无缓存或强制刷新，从 tqsdk 全量获取
+        df = self._fetch_kline_from_tqsdk(symbol, start_date, end_date, freq)
+        if not df.empty:
+            self._save_kline_to_file(df, symbol, freq)
+        return df
+
+    def _fetch_kline_from_tqsdk(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        freq: str = "daily",
+    ) -> pd.DataFrame:
+        """从 tqsdk 获取K线数据"""
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
         logger.info("从 tqsdk 获取K线: symbol=%s, %s ~ %s, freq=%s", symbol, start_date, end_date, freq)
         api = self._get_api()
 
@@ -315,7 +352,6 @@ class DataService:
         deadline = time.time() + 10
         api.wait_update(deadline=deadline)
 
-        # TqDataFrame 本身就是 DataFrame 子类，直接使用
         df = kline.copy()
         df = df[df["datetime"] > 0].copy()
         df["datetime"] = pd.to_datetime(df["datetime"], unit="ns")
@@ -332,11 +368,7 @@ class DataService:
             "close_oi": "close_interest",
         })
 
-        # 3. 保存到本地（增量合并）
-        if not df.empty:
-            self._save_kline_to_file(df, symbol, freq)
-
-        logger.info("K线数据获取完成: %s, %d 条", symbol, len(df))
+        logger.info("tqsdk K线获取完成: %s, %d 条", symbol, len(df))
         return df
 
     def _sync_get_quote(self, symbol: str) -> dict:
