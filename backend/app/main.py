@@ -12,18 +12,18 @@ from app.config import CORS_ORIGINS
 from app.api import market, factor, portfolio, backtest, trade
 from app.services.data_service import data_service
 
-# 配置日志 - 使用 stdout 并立即刷新，确保 uvicorn reload 模式下也能看到
-_log_handler = logging.StreamHandler(sys.stdout)
-_log_handler.setLevel(logging.DEBUG)
-_log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-
+# 日志配置放在导入之后，因为 tqsdk 会在导入时覆盖 root logger 配置
+# 必须用 force=True 才能夺回控制权
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[_log_handler],
+    handlers=[logging.StreamHandler(sys.stdout)],
     force=True,
 )
+# 抑制 tqsdk 的日志噪音
+logging.getLogger("tqsdk").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 

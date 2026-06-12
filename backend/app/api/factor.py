@@ -1,10 +1,14 @@
 """因子分析 API"""
+import logging
+
 import numpy as np
 from fastapi import APIRouter, Query
 from typing import Optional
 
 from app.services.data_service import data_service
 from app.services.factor_engine import factor_engine
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/factor", tags=["因子分析"])
 
@@ -35,10 +39,16 @@ async def compute_factor(
 ):
     """计算截面因子值"""
     symbol_list = [s.strip() for s in symbols.split(",")]
+    logger.info("计算截面因子: symbols=%s, factor=%s, %s ~ %s, window=%d", symbol_list, factor_name, start_date, end_date, window)
     data_dict = await data_service.get_multiple_klines(symbol_list, start_date, end_date)
 
     if not data_dict:
+        logger.warning("未获取到任何K线数据！symbols=%s", symbol_list)
         return {"error": "未获取到数据"}
+
+    logger.info("获取到K线数据: %d / %d 个合约", len(data_dict), len(symbol_list))
+    for sym, df in data_dict.items():
+        logger.info("  %s: %d 条K线", sym, len(df))
 
     factor_df = factor_engine.compute_cross_section(
         data_dict, factor_name, date=date, preprocess=True, window=window

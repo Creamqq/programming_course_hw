@@ -88,7 +88,7 @@ use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 const factorStore = useFactorStore()
 
 const selectedFactor = ref('momentum')
-const symbols = ref('SHFE.cu2401,SHFE.al2401,SHFE.zn2401,DCE.m2401,DCE.y2401,CZCE.SA401,CZCE.MA401')
+const symbols = ref('SHFE.cu2608,SHFE.al2608,SHFE.zn2608,DCE.m2608,DCE.y2608,CZCE.SA608,CZCE.MA608')
 const startDate = ref(new Date(Date.now() - 90 * 86400000))
 const endDate = ref(new Date())
 const window = ref(20)

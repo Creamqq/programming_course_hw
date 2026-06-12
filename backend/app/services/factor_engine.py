@@ -1,7 +1,11 @@
 """因子引擎 - 截面因子计算"""
+import logging
+
 import pandas as pd
 import numpy as np
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class FactorEngine:
@@ -117,8 +121,13 @@ class FactorEngine:
         data_dict: {symbol: kline_df}
         返回: DataFrame with columns [symbol, factor_value, rank]
         """
+        logger.info("计算截面因子: factor=%s, 合约数=%d, date=%s", factor_name, len(data_dict), date)
         results = []
+        nan_count = 0
         for symbol, df in data_dict.items():
+            if df.empty:
+                logger.debug("  %s: K线数据为空，跳过", symbol)
+                continue
             factor_series = self.compute_factor(df, factor_name, **factor_kwargs)
             if date:
                 # 取指定日期的因子值
@@ -128,20 +137,31 @@ class FactorEngine:
                     val = factor_series.loc[idx]
                     if not np.isnan(val):
                         results.append({"symbol": symbol, "factor_value": val})
+                    else:
+                        nan_count += 1
+                else:
+                    logger.debug("  %s: 指定日期 %s 无数据", symbol, date)
             else:
                 # 取最新值
                 val = factor_series.iloc[-1]
                 if not np.isnan(val):
                     results.append({"symbol": symbol, "factor_value": val})
+                else:
+                    nan_count += 1
+
+        logger.info("截面因子结果: 有效=%d, NaN=%d, 空数据=%d", len(results), nan_count, len(data_dict) - len(results) - nan_count)
 
         if not results:
+            logger.warning("截面因子计算无有效结果！data_dict keys=%s", list(data_dict.keys()))
             return pd.DataFrame(columns=["symbol", "factor_value", "rank"])
 
         result_df = pd.DataFrame(results)
         if preprocess:
             result_df["factor_value"] = self.winsorize(result_df["factor_value"])
             result_df["factor_value"] = self.standardize(result_df["factor_value"])
-        result_df["rank"] = result_df["factor_value"].rank(ascending=False, na_option="bottom").astype(int)
+        result_df["rank"] = result_df["factor_value"].rank(ascending=False).astype(int)
+        # 丢弃因子值为 NaN 的行，避免 JSON 序列化报错
+        result_df = result_df.dropna(subset=["factor_value"])
         return result_df.sort_values("rank")
 
 
