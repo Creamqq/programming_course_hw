@@ -52,6 +52,10 @@ class DataService:
             auth = TqAuth(TQ_USER, TQ_PASSWORD) if TQ_USER else TqAuth()  # type: ignore[call-arg]
             sim = TqSim()
             self._api = TqApi(sim, auth=auth)
+            # tqsdk 的 TqApi() 构造函数会覆盖 root logger 配置
+            # 必须重新配置，否则应用日志会丢失
+            from app.main import _setup_app_logging
+            _setup_app_logging()
             logger.info("TqApi 初始化完成")
         return self._api
 

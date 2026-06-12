@@ -12,17 +12,27 @@ from app.config import CORS_ORIGINS
 from app.api import market, factor, portfolio, backtest, trade
 from app.services.data_service import data_service
 
-# 日志配置放在导入之后，因为 tqsdk 会在导入时覆盖 root logger 配置
-# 必须用 force=True 才能夺回控制权
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[logging.StreamHandler(sys.stdout)],
-    force=True,
-)
-# 抑制 tqsdk 的日志噪音
-logging.getLogger("tqsdk").setLevel(logging.WARNING)
+
+def _setup_app_logging():
+    """强制重新配置日志，防止被 tqsdk 覆盖。
+    
+    tqsdk 在 TqApi 初始化时会调用 logging.basicConfig() 覆盖 root logger。
+    因此必须用 force=True 重新夺回控制权。
+    """
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setLevel(logging.DEBUG)
+    _handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root = logging.getLogger()
+    root.handlers.clear()  # 清除 tqsdk 添加的 handler
+    root.addHandler(_handler)
+    root.setLevel(logging.DEBUG)
+    logging.getLogger("tqsdk").setLevel(logging.WARNING)
+
+# 导入后立即配置一次（tqsdk 模块导入时可能已配置日志）
+_setup_app_logging()
 
 logger = logging.getLogger(__name__)
 
