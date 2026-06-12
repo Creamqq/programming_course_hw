@@ -11,6 +11,25 @@
                 <el-option v-for="p in presets" :key="p.name" :label="p.name" :value="p.name" />
               </el-select>
             </el-form-item>
+            <el-form-item label="合约池">
+              <el-select
+                v-model="config.universe"
+                multiple
+                filterable
+                remote
+                :remote-method="searchContracts"
+                :loading="contractsLoading"
+                placeholder="搜索并选择合约"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="c in contractOptions"
+                  :key="c.value"
+                  :label="c.label"
+                  :value="c.value"
+                />
+              </el-select>
+            </el-form-item>
             <el-form-item label="因子">
               <el-select v-model="config.factor_name">
                 <el-option label="动量" value="momentum" />
@@ -123,7 +142,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useBacktestStore } from '@/stores'
-import { backtestApi } from '@/api'
+import { backtestApi, marketApi } from '@/api'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -139,6 +158,30 @@ const presets = ref<Array<{ name: string; config: any }>>([])
 
 const longRatioPct = ref(30)
 const shortRatioPct = ref(30)
+
+const contractsLoading = ref(false)
+const contractOptions = ref<Array<{ value: string; label: string }>>([])
+const allContracts = ref<string[]>([])
+
+async function searchContracts(query: string) {
+  if (allContracts.value.length === 0) {
+    contractsLoading.value = true
+    try {
+      const res = await marketApi.getContracts()
+      allContracts.value = res.data.contracts || []
+    } finally {
+      contractsLoading.value = false
+    }
+  }
+  if (query) {
+    contractOptions.value = allContracts.value
+      .filter(c => c.toLowerCase().includes(query.toLowerCase()))
+      .slice(0, 50)
+      .map(c => ({ value: c, label: c }))
+  } else {
+    contractOptions.value = allContracts.value.slice(0, 50).map(c => ({ value: c, label: c }))
+  }
+}
 
 const config = ref({
   start_date: new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10),

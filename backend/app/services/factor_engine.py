@@ -159,9 +159,9 @@ class FactorEngine:
         if preprocess:
             result_df["factor_value"] = self.winsorize(result_df["factor_value"])
             result_df["factor_value"] = self.standardize(result_df["factor_value"])
-        result_df["rank"] = result_df["factor_value"].rank(ascending=False).astype(int)
-        # 丢弃因子值为 NaN 的行，避免 JSON 序列化报错
+        # 先丢弃 NaN，再计算排名和转 int
         result_df = result_df.dropna(subset=["factor_value"])
+        result_df["rank"] = result_df["factor_value"].rank(ascending=False).astype(int)
         return result_df.sort_values("rank")
 
 

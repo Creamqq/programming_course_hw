@@ -15,7 +15,7 @@ async def run_backtest(config: BacktestConfig):
     if config.universe:
         symbols = config.universe
     else:
-        symbols = await data_service.get_contracts()
+        return {"error": "请选择回测合约池（universe 不能为空）"}
 
     data_dict = await data_service.get_multiple_klines(
         symbols, config.start_date, config.end_date
